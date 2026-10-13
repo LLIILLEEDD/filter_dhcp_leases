@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+
+import re
+import ipaddress
+import sys
+import os
+import subprocess
+
+### Configuration DEV
+# LEASES_FILE = "dhcpd.leases"
+# DEST_FILE = "dhcpd.leases2"
+# RESTART_SERVICE = False
+### Configuration PROD
+LEASES_FILE = "/var/lib/dhcpd/dhcpd.leases"
+DEST_FILE = LEASES_FILE
+RESTART_SERVICE = True
+
+TARGET_SUBNET = "10.1.140.0/25"
+RE_LEASE = re.compile(r'lease\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+\{')
+BACKUP_FILE = LEASES_FILE + ".bak"
+
+# ends 1 2026/11/16 02:18:58;
+
+def main():
+    if RESTART_SERVICE:
+        if os.getuid() != 0:
+            sys.exit("Error: This script must be run with root privileges (sudo).")
+        print(f"[+] Stop dhcpd")
+        subprocess.check_call(['/usr/bin/systemctl', 'stop', 'dhcpd'])
+
+    if not os.path.exists(LEASES_FILE):
+        sys.exit(f"Error: Leases file not found at {LEASES_FILE}")
+
+    # Read original file
+    with open(LEASES_FILE, "r") as f:
+        content = f.read()
+
+    # Create safe backup
+    with open(BACKUP_FILE, "w") as f:
+        f.write(content)
+    print(f"[*] Backup created at: {BACKUP_FILE}")
+
+    # Parse and target subnet
+    network = ipaddress.ip_network(TARGET_SUBNET)
+
+    matched_count = 0
+    match_lease = False
+
+    new_content = ''
+    for line in content.split('\n'):
+        if line.startswith('lease '):
+            match_lease = False
+
+        match = RE_LEASE.search(line)
+        if match:
+            ip_addr_str = match.group(1)
+            ip_addr = ipaddress.ip_address(ip_addr_str)
+            if ip_addr in network:
+                print(f'[!] matched IP {ip_addr_str}, remove lease')
+                matched_count += 1
+                match_lease = True
+
+        if not match_lease:
+            new_content += line + '\n'
+            # print(line)
+
+    if new_content[-1] == '\n':
+        new_content = new_content[:-1]
+
+    # Save filtered output back to production file
+    print(f"[+] Write new content to {DEST_FILE}")
+    with open(DEST_FILE, "w") as f:
+        f.write(new_content)
+
+    # Split using the lease header structure
+    print(f"[+] Successfully removed {matched_count} leases belonging to {TARGET_SUBNET}")
+
+    if RESTART_SERVICE:
+        print(f"[+] Start dhcpd")
+        subprocess.check_call(['/usr/bin/systemctl', 'start', 'dhcpd'])
+
+if __name__ == "__main__":
+    main()
+
