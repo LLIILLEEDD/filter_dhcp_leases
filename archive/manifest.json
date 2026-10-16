@@ -1,0 +1,121 @@
+{
+  "snapshot": "archive/pre_production_2026-10-16",
+  "entries": [
+    "README.md",
+    "STUDY_ADDITIONS_EXPLAINED.txt",
+    "WSL_DHCP_LAB.md",
+    "__pycache__",
+    "backups",
+    "del_leases.py_old",
+    "dhcp_leases.py",
+    "dhcp_service.py",
+    "dhcpd.leases",
+    "docs",
+    "lab",
+    "test_dhcp_service.py",
+    "test_study_leases.py"
+  ],
+  "fixture": "backups/demo.leases.20261016T102905.490281Z.e5712f760c244f8dabc73fea5007196e.bak",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 27791,
+      "sha256": "6b04f0181f782c66e3b17278fb92be34bc601bcb5e3985c3e8a3cb5ac08b7855"
+    },
+    {
+      "path": "STUDY_ADDITIONS_EXPLAINED.txt",
+      "size": 61300,
+      "sha256": "92fb335f59ba3e4573df95aeea5dffe692bb329456835280f20075470b05f305"
+    },
+    {
+      "path": "WSL_DHCP_LAB.md",
+      "size": 16484,
+      "sha256": "c9987736866432bce31569c0cc3eba6216fbca0c62afc7f0779c9cb11c886395"
+    },
+    {
+      "path": "__pycache__/dhcp_leases.cpython-312.pyc",
+      "size": 41132,
+      "sha256": "82e11253adbd254629bb3e7b10c146acec148ff0cd64f31ebb645872dde13857"
+    },
+    {
+      "path": "__pycache__/dhcp_service.cpython-312.pyc",
+      "size": 17212,
+      "sha256": "6848ccddf9d8489d2d0a0b8dece1b930d8460c975f46ae3eda4dbb3f6fc2d6cc"
+    },
+    {
+      "path": "__pycache__/test_dhcp_service.cpython-312.pyc",
+      "size": 32684,
+      "sha256": "5ad3af7ea67415cfabf2ca21a047c9dc968f7260db93a2a07b88d81c426cf76e"
+    },
+    {
+      "path": "__pycache__/test_study_leases.cpython-312.pyc",
+      "size": 48400,
+      "sha256": "ef92ed39e0bfed4d34e64ddaa7928e6fdda2b2dd8081133f281510f38396ba72"
+    },
+    {
+      "path": "backups/demo.leases.20261016T102905.490281Z.e5712f760c244f8dabc73fea5007196e.bak",
+      "size": 2239,
+      "sha256": "0e0103557db3970e2d63eda84f419256041b2ffae69bdeb415703b6e14f0db8b"
+    },
+    {
+      "path": "del_leases.py_old",
+      "size": 2309,
+      "sha256": "9ee5b3dc9eec6ce29c9311a3fe2f4e4802a56fa2e707538cf7357521aa9dd637"
+    },
+    {
+      "path": "dhcp_leases.py",
+      "size": 31893,
+      "sha256": "61437d8498117edd5ff7b366d85ed7e72a041fd4f35942b7bf7a47302550bc31"
+    },
+    {
+      "path": "dhcp_service.py",
+      "size": 11456,
+      "sha256": "195a1ec3d1ca1fd4696d78ac511f8b7df0a5f4229106a287fad8370f7b5c26ad"
+    },
+    {
+      "path": "dhcpd.leases",
+      "size": 6911882,
+      "sha256": "626090d3cdf390907e6ebd29289e35f4e525b55ad8e7571253171a63c7be4b4b"
+    },
+    {
+      "path": "docs/dhcp_leases_flowchart.png",
+      "size": 1917499,
+      "sha256": "93dea9d88379d38bb07080db01ad2c68c4d65c27fbb72f97ddedcbfc7be63fad"
+    },
+    {
+      "path": "docs/dhcp_leases_flowchart.prompt.txt",
+      "size": 8012,
+      "sha256": "e715a474f085b286452957d6ba6566035fd7dfb05e42a19feddd1f18031ea622"
+    },
+    {
+      "path": "lab/dhclient-script.sh",
+      "size": 650,
+      "sha256": "b048088da5c3b9c2f68376ef02a94455d284e543c9fef62c7c295f55bdb2ef66"
+    },
+    {
+      "path": "lab/dhcp-leases-lab.service",
+      "size": 446,
+      "sha256": "1ab830195d5a745e79dcf501f7e6d56f791d776fa8a524fbcacd6242259ca78b"
+    },
+    {
+      "path": "lab/dhcpd.conf",
+      "size": 288,
+      "sha256": "cd22adeda497202de39e436bfe0d678afbea9a533538fc526d4e040f6c0b8a51"
+    },
+    {
+      "path": "lab/setup_network.sh",
+      "size": 1282,
+      "sha256": "62b86d735741cc33eefee74caa080f614902892ccf0b2a1bf78f83f71a71dfb3"
+    },
+    {
+      "path": "test_dhcp_service.py",
+      "size": 15516,
+      "sha256": "e5b3362c814967de97388ab80550d13ba8f1b84e92b7264f06f337f4d7393566"
+    },
+    {
+      "path": "test_study_leases.py",
+      "size": 24861,
+      "sha256": "5341604d871dee9f865d9336dc5f32f186f26c861b819867d651a146a214ac8b"
+    }
+  ]
+}

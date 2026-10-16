@@ -1,0 +1,14 @@
+# Локальные снимки: содержат базы лиз, копии и прежние материалы.
+/archive/pre_production_*/
+
+# Кэш и результаты запусков.
+__pycache__/
+*.py[cod]
+*.log
+*.leases
+*.bak
+*.tmp
+.*.dhcp-filter.lock
+
+# Синтетический пример необходим для тестов.
+!/archive/tests/fixtures/demo.leases
