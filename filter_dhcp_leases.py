@@ -33,6 +33,7 @@ def parse_arguments(argv=None) -> argparse.Namespace:
             "Выбор активных DHCPv4-лиз с остатком аренды больше заданного порога. "
             "По умолчанию результат пишется отдельно; --apply заменяет исходник."
         ),
+
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         allow_abbrev=False,
     )
@@ -206,12 +207,18 @@ def validate_paths(input_path: pathlib.Path, output_path: pathlib.Path) -> None:
 
 
 def source_signature(path: pathlib.Path) -> tuple:
+    """Запоминает характеристики файла, чтобы позже проверить,
+    не изменился ли он во время работы программы."""
     info = path.stat()
     return (
         info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
         info.st_ctime_ns, info.st_mode, info.st_uid, info.st_gid, info.st_nlink,
     )
 
+def ensure_source_unchanged(path: pathlib.Path, original: bytes, signature: tuple) -> None:
+    """Отменяет применение, если исходник изменился с начала анализа."""
+    if source_signature(path) != signature or path.read_bytes() != original:
+        raise ValueError("Исходный файл изменился во время обработки; повторите анализ")
 
 def read_file(file_path: pathlib.Path) -> str:
     # newline="" сохраняет исходные переводы строк, в том числе Windows CRLF.
@@ -219,17 +226,15 @@ def read_file(file_path: pathlib.Path) -> str:
         return file.read()
 
 
-def ensure_source_unchanged(path: pathlib.Path, original: bytes, signature: tuple) -> None:
-    """Отменяет применение, если исходник изменился с начала анализа."""
-    if source_signature(path) != signature or path.read_bytes() != original:
-        raise ValueError("Исходный файл изменился во время обработки; повторите анализ")
-
-
 # 4. Разбор блоков и последние записи IP
 # ----------------------------------------------------------------------
 
 
 def extract_lease_blocks(content: str) -> list[str]:
+    """Извлекает из текста dhcpd.leases все блоки lease {...}.
+    Находит начало и конец каждого блока по фигурным скобкам,
+    игнорируя скобки внутри комментариев и строк в кавычках.
+    Возвращает список блоков без изменения их содержимого."""
     blocks = []
     depth = 0
     lease_start = None
@@ -284,6 +289,8 @@ def extract_lease_blocks(content: str) -> list[str]:
 
 
 def get_latest_leases(blocks) -> dict:
+    """Создаёт словарь с последней записью аренды для каждого IP.
+    Если IP встречается повторно, новая запись заменяет старую."""
     latest = {}
     for block in blocks:
         lease_data = parse_lease(block)
@@ -327,6 +334,9 @@ def find_leases_to_delete(latest_leases, subnet, check_date, hours=24) -> list:
 
 
 def should_delete(lease_data, subnet, check_date, hours=24) -> bool:
+    """Проверяет, подходит ли аренда для удаления:
+    IP находится в нужной подсети, аренда активна,
+    имеет конечный срок и остаток больше заданного порога."""
     if not is_in_subnet(lease_data["ip"], subnet):
         return False
     if not lease_data["active"]:
@@ -345,6 +355,7 @@ def is_in_subnet(ip, subnet) -> bool:
 
 
 def parse_end_date(ends: str | None) -> datetime.datetime | None:
+    """Преобразует строку окончания DHCP-аренды в datetime с UTC."""
     if ends is None or ends == "never":
         return None
     date = datetime.datetime.strptime(ends, DATE_FORMAT)
@@ -362,7 +373,10 @@ def get_remaining_time(end_date, check_date) -> datetime.timedelta | None:
 
 
 def build_filtered_content(content, blocks, ips_to_delete) -> str:
-    """Удаляет блоки вместе с их отдельной строкой, сохраняя соседний текст."""
+    """Создаёт новую версию содержимого dhcpd.leases.
+    Исключает все блоки с выбранными IP, сохраняя остальные
+    блоки, комментарии и текст между ними.
+    Не изменяет исходный файл на диске."""
     parts = []
     position = 0
     for block in blocks:
@@ -392,7 +406,8 @@ def build_filtered_content(content, blocks, ips_to_delete) -> str:
 
 
 def verify_result(blocks, new_content, ips_to_delete) -> list[str]:
-    """Проверяет оставшиеся блоки до любой записи на диск."""
+    """Страховочная проверка перед сохранением файла.
+    Сравнивает оставшиеся блоки с ожидаемыми."""
     new_blocks = extract_lease_blocks(new_content)
     expected_blocks = []
     for block in blocks:
@@ -526,7 +541,12 @@ def apply_safely(
     backup_dir: pathlib.Path | None, logger: logging.Logger,
     *, lease_validator=None, transaction=None,
 ) -> pathlib.Path:
-    """Проверяет файл на диске, создаёт копию и атомарно заменяет исходник."""
+    """Безопасно заменяет исходный файл DHCP-лиз.
+    Создаёт временный файл с новым содержимым, сохраняет права
+    и владельца, проверяет результат и создаёт резервную копию.
+    Перед заменой повторно проверяет неизменность исходника.
+    Использует os.replace() для атомарной замены файла.
+    При ошибке удаляет оставшийся временный файл."""
     if input_path.is_symlink() or input_path.stat().st_nlink != 1:
         raise ValueError("--apply не поддерживает символические и жёсткие ссылки")
     ensure_source_unchanged(input_path, original, signature)
@@ -589,7 +609,11 @@ def save_filtered_file(
     original: bytes, signature: tuple, backup_dir: pathlib.Path | None,
     logger: logging.Logger,
 ) -> pathlib.Path:
-    """Сохраняет отдельный результат и копию исходника, не заменяя исходную базу."""
+    """Сохраняет отфильтрованные лизы в отдельный файл.
+    Проверяет неизменность исходника и создаёт резервную копию.
+    Сравнивает копию с исходными данными, записывает результат
+    и проверяет корректность записи.
+    Исходный файл не перезаписывает."""
     ensure_source_unchanged(input_path, original, signature)
     backup_path = create_backup(input_path, backup_dir)
     logger.info("Резервная копия: %s", backup_path)
@@ -606,7 +630,11 @@ def save_filtered_file(
 def create_backup(
     input_path: pathlib.Path, backup_dir: pathlib.Path | None = None,
 ) -> pathlib.Path:
-    """Побайтовая копия: UTC + случайный суффикс, режим xb запрещает перезапись."""
+    """Создаёт побайтовую резервную копию исходного файла.
+    Использует уникальное имя с датой и случайным суффиксом.
+    Копирует права доступа и проверяет совпадение содержимого.
+    При ошибке удаляет неполную копию и передаёт исключение выше.
+    Возвращает путь к созданному файлу."""
     directory = backup_dir if backup_dir is not None else input_path.parent
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")

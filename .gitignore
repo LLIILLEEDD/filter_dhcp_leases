@@ -1,6 +1,3 @@
-# Локальные снимки: содержат базы лиз, копии и прежние материалы.
-/archive/pre_production_*/
-
 # Кэш и результаты запусков.
 __pycache__/
 *.py[cod]
@@ -10,8 +7,6 @@ __pycache__/
 *.tmp
 .*.dhcp-filter.lock
 
-# Синтетический пример необходим для тестов.
-!/archive/tests/fixtures/demo.leases
 # Практическая DHCP-лаборатория: только локальные результаты и зависимости.
 /tests/results/
 /tests/.tools/

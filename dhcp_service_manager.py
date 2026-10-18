@@ -39,6 +39,10 @@ def run_command(command, logger, timeout) -> str:
 
 
 def service_state(args, logger) -> dict[str, str]:
+    """Получает информацию о состоянии DHCP-службы через systemctl.
+    Проверяет, загружена ли служба в systemd, и возвращает словарь
+    с её состоянием (active/inactive), подстатусом (running и др.)
+    и PID основного процесса."""
     output = run_command(
         [args.systemctl, "--no-ask-password", "show",
          "--property=LoadState,ActiveState,SubState,MainPID", "--", args.service],
@@ -55,7 +59,10 @@ def service_state(args, logger) -> dict[str, str]:
 
 
 def check_process_binding(args, state) -> None:
-    """Не позволяет остановить чужой процесс или изменить чужую базу."""
+    """Проверяет, что запущен именно нужный экземпляр DHCP-сервера.
+    Сверяет исполняемый файл dhcpd и параметры работающего процесса
+    через /proc/PID. Проверяет соответствие путей к конфигурации
+    и базе аренд, чтобы не остановить чужую службу."""
     pid = int(state.get("MainPID", "0"))
     if pid <= 0:
         raise RuntimeError("У службы нет работающего MainPID")
@@ -86,6 +93,7 @@ def check_process_binding(args, state) -> None:
 
 
 def validate_config(args, logger) -> None:
+    """Проверяет конфигурацию DHCP-сервера через dhcpd -4 -t."""
     run_command(
         [args.dhcpd, "-4", "-t", "-cf", args.dhcp_config],
         logger, args.service_timeout,
@@ -93,7 +101,9 @@ def validate_config(args, logger) -> None:
 
 
 def validate_lease_file(args, lease_path, logger) -> None:
-    """-T не обслуживает сеть, но может создавать свои временные файлы."""
+    """Проверяет корректность файла DHCP-аренд через dhcpd -4 -T.
+    Используется для проверки исходной базы и временного файла
+    до замены оригинала."""
     run_command(
         [args.dhcpd, "-4", "-T", "-cf", args.dhcp_config, "-lf", lease_path],
         logger, args.service_timeout,
@@ -219,7 +229,12 @@ def recover_service(args, transaction, logger, create_backup) -> None:
 
 @contextlib.contextmanager
 def service_session(args, logger, create_backup) -> Iterator[dict | None]:
-    """Остановка ДО чтения; запуск ПОСЛЕ применения; восстановление при отказах."""
+    """Управляет полным циклом безопасной обработки DHCP-базы.
+    Проверяет окружение и службу, устанавливает блокировку,
+    останавливает DHCP до чтения базы и передаёт управление main().
+    После обработки запускает службу обратно.
+    При ошибке пытается восстановить первоначальное состояние.
+    В dry-run и без --manage-service службу не трогает."""
     if not args.manage_service or args.dry_run:
         yield None
         return
