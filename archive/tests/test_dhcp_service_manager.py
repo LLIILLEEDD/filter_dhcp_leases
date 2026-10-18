@@ -183,6 +183,19 @@ class ManagedServiceTests(unittest.TestCase):
         self.assertEqual(self.stop.call_count, 2)
         self.start.assert_called_once()
 
+    def test_directory_sync_failure_after_replace_restores_original(self):
+        # Замена уже произошла, но fsync каталога может завершиться ошибкой.
+        # Отмеченная замена должна запустить восстановление, а не только start.
+        with mock.patch.object(study, "sync_directory", side_effect=OSError("directory fsync failed")):
+            code, output, errors = self.run_main()
+        self.assertEqual(code, 1)
+        self.assertEqual(self.source.read_bytes(), self.original)
+        self.assertEqual(self.stop.call_count, 2)
+        self.start.assert_called_once()
+        self.assertEqual(len(list(self.directory.glob("*.bak"))), 2)
+        self.assertIn("Файл уже заменён", errors)
+        self.assertNotIn("ИТОГ: ИСХОДНИК ОБНОВЛЁН", output)
+
     def test_failed_recovery_is_explicit_and_never_reports_success(self):
         self.start.side_effect = RuntimeError("cannot start")
         code, output, errors = self.run_main()

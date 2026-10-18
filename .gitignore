@@ -12,3 +12,10 @@ __pycache__/
 
 # Синтетический пример необходим для тестов.
 !/archive/tests/fixtures/demo.leases
+# Практическая DHCP-лаборатория: только локальные результаты и зависимости.
+/tests/results/
+/tests/.tools/
+/tests/.lab-state.json
+/tests/.lab.lock
+/tests/.lab-state-*.tmp
+!/tests/fixtures/*.leases

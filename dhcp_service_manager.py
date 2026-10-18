@@ -44,7 +44,11 @@ def service_state(args, logger) -> dict[str, str]:
          "--property=LoadState,ActiveState,SubState,MainPID", "--", args.service],
         logger, args.service_timeout,
     )
-    state = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+    state = {}
+    for line in output.splitlines():
+        if "=" in line:
+            name, value = line.split("=", 1)
+            state[name] = value
     if state.get("LoadState") != "loaded":
         raise RuntimeError(f"Служба {args.service} не загружена")
     return state
@@ -59,7 +63,13 @@ def check_process_binding(args, state) -> None:
     executable = (process / "exe").resolve(strict=True)
     if executable != args.dhcpd.resolve(strict=True):
         raise RuntimeError("MainPID службы не соответствует выбранному dhcpd")
-    command = [os.fsdecode(item) for item in (process / "cmdline").read_bytes().split(b"\0") if item]
+    # В /proc аргументы разделены нулевым байтом, а не пробелом:
+    # путь с пробелами должен остаться одним аргументом.
+    raw_arguments = (process / "cmdline").read_bytes().split(b"\0")
+    command = []
+    for argument in raw_arguments:
+        if argument:
+            command.append(os.fsdecode(argument))
     if any(option in command for option in ("-6", "-chroot", "-play")):
         raise RuntimeError("Поддерживается только обычный DHCPv4 без chroot/playback")
     for option, expected in (("-cf", args.dhcp_config), ("-lf", args.input)):
@@ -138,6 +148,7 @@ def service_lock(input_path) -> Iterator[None]:
 
 
 def sync_directory(path) -> None:
+    """Синхронизирует каталог, чтобы закрепить изменение имени после os.replace()."""
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)
@@ -149,7 +160,7 @@ def restore_original(args, transaction, logger) -> None:
     """Атомарный откат только после подтверждённой остановки службы."""
     backup = transaction["backup"]
     original = transaction["original"]
-    info = transaction["stat"]
+    source_stat = transaction["stat"]
     if backup is None or backup.read_bytes() != original:
         raise RuntimeError("Нет проверенной резервной копии для отката")
     temporary_path = None
@@ -161,8 +172,8 @@ def restore_original(args, transaction, logger) -> None:
             temporary_path = pathlib.Path(temporary.name)
             temporary.write(original)
             temporary.flush()
-            os.fchown(temporary.fileno(), info.st_uid, info.st_gid)
-            os.fchmod(temporary.fileno(), stat.S_IMODE(info.st_mode))
+            os.fchown(temporary.fileno(), source_stat.st_uid, source_stat.st_gid)
+            os.fchmod(temporary.fileno(), stat.S_IMODE(source_stat.st_mode))
             os.fsync(temporary.fileno())
         if temporary_path.read_bytes() != original:
             raise RuntimeError("Проверка файла восстановления не пройдена")
@@ -175,12 +186,8 @@ def restore_original(args, transaction, logger) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
-@contextlib.contextmanager
-def service_session(args, logger, create_backup) -> Iterator[dict | None]:
-    """Остановка ДО чтения; запуск ПОСЛЕ применения; восстановление при отказах."""
-    if not args.manage_service or args.dry_run:
-        yield None
-        return
+def validate_service_environment(args) -> None:
+    """Проверяет окружение до блокировки и остановки; сохраняет путь в args.systemctl."""
     if not sys.platform.startswith("linux") or os.geteuid() != 0:
         raise RuntimeError("--manage-service требует Linux и root (sudo)")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@:-]*\.service", args.service):
@@ -194,13 +201,44 @@ def service_session(args, logger, create_backup) -> Iterator[dict | None]:
         raise RuntimeError(f"Конфигурация DHCP не найдена: {args.dhcp_config}")
     if args.input.is_symlink() or not args.input.is_file() or args.input.stat().st_nlink != 1:
         raise RuntimeError("Для службы нужен обычный исходный файл без ссылок")
+
+
+def recover_service(args, transaction, logger, create_backup) -> None:
+    """Возвращает службу к исходной базе; вызывается под той же блокировкой."""
+    if transaction["replaced"]:
+        # start мог частично запустить процесс, поэтому сначала снова stop.
+        stop_service(args, logger)
+        try:
+            failed_copy = create_backup(args.input, args.backup_dir)
+            logger.info("База перед откатом сохранена отдельно: %s", failed_copy)
+        except (OSError, ValueError):
+            logger.exception("Не удалось сохранить диагностическую копию перед откатом")
+        restore_original(args, transaction, logger)
+    start_service(args, logger)
+
+
+@contextlib.contextmanager
+def service_session(args, logger, create_backup) -> Iterator[dict | None]:
+    """Остановка ДО чтения; запуск ПОСЛЕ применения; восстановление при отказах."""
+    if not args.manage_service or args.dry_run:
+        yield None
+        return
+    validate_service_environment(args)
     with service_lock(args.input):
         state = service_state(args, logger)
         if state.get("ActiveState") != "active" or state.get("SubState") != "running":
             raise RuntimeError("Управляемый режим требует уже запущенную службу active/running")
         check_process_binding(args, state)
         validate_config(args, logger)
-        transaction = {"replaced": False, "backup": None, "original": None, "stat": None}
+        # Состояние восстановления общее для трёх этапов:
+        # main() сохраняет original/stat, apply_safely() — backup/replaced,
+        # обработчик ошибки ниже решает, нужно ли восстанавливать файл.
+        transaction = {
+            "replaced": False,
+            "backup": None,
+            "original": None,
+            "stat": None,
+        }
         try:
             # Включая неуспешную/прерванную stop: ниже будет попытка вернуть службу.
             stop_service(args, logger)
@@ -210,16 +248,7 @@ def service_session(args, logger, create_backup) -> Iterator[dict | None]:
         except BaseException as original_error:
             logger.exception("Управляемое применение прервано; восстанавливаем исходное состояние")
             try:
-                if transaction["replaced"]:
-                    # start мог частично запустить процесс, поэтому сначала снова stop.
-                    stop_service(args, logger)
-                    try:
-                        failed_copy = create_backup(args.input, args.backup_dir)
-                        logger.info("База перед откатом сохранена отдельно: %s", failed_copy)
-                    except (OSError, ValueError):
-                        logger.exception("Не удалось сохранить диагностическую копию перед откатом")
-                    restore_original(args, transaction, logger)
-                start_service(args, logger)
+                recover_service(args, transaction, logger, create_backup)
             except BaseException as recovery_error:
                 raise RuntimeError(
                     f"Операция не завершена: {original_error}. "

@@ -14,7 +14,7 @@ import tempfile
 import time
 import uuid
 
-from dhcp_service_manager import service_session, validate_lease_file
+from dhcp_service_manager import service_session, sync_directory, validate_lease_file
 
 
 DEFAULT_INPUT_PATH = pathlib.Path("./dhcpd.leases")
@@ -155,9 +155,7 @@ def configure_logging(args) -> logging.Logger:
     logger = logging.getLogger("filter_dhcp_leases")
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-        handler.close()
+    close_logging_handlers(logger)
     formatter = logging.Formatter(
         "%(asctime)sZ %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S",
     )
@@ -177,6 +175,14 @@ def configure_logging(args) -> logging.Logger:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
     return logger
+
+
+def close_logging_handlers(logger: logging.Logger) -> None:
+    """Закрывает обработчики перед перенастройкой и после завершения запуска."""
+    # Список копируется: удаление из исходного списка при обходе пропускает элементы.
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
 
 
 class ConsoleFormatter(logging.Formatter):
@@ -456,10 +462,12 @@ def print_lease_table(leases, selected_ips, check_date) -> None:
             format_remaining(get_remaining_time(end_date, check_date)),
             "УДАЛИТЬ" if lease["ip"] in selected_ips else "оставить",
         ))
-    widths = [
-        max(len(row[column]) for row in [headers, *rows])
-        for column in range(len(headers))
-    ]
+    # Начинаем с ширины заголовков, затем учитываем значения каждой строки.
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for column, value in enumerate(row):
+            widths[column] = max(widths[column], len(value))
+
     def print_row(row) -> None:
         print("  " + " | ".join(
             value.ljust(width) for value, width in zip(row, widths)
@@ -559,17 +567,14 @@ def apply_safely(
         # Последняя проверка непосредственно перед заменой. Служба должна быть остановлена.
         ensure_source_unchanged(input_path, original, signature)
         os.replace(temporary_path, input_path)
+        # Даже ошибка синхронизации каталога ниже должна привести к восстановлению.
         if transaction is not None:
             transaction["replaced"] = True
         temporary_path = None
         logger.info("Рабочий файл заменён: %s", input_path)
         if os.name == "posix":
             try:
-                directory_fd = os.open(input_path.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                sync_directory(input_path.parent)
             except OSError:
                 logger.exception("Файл уже заменён, но синхронизация каталога не удалась")
                 raise
@@ -577,6 +582,25 @@ def apply_safely(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def save_filtered_file(
+    input_path: pathlib.Path, output_path: pathlib.Path, content: str,
+    original: bytes, signature: tuple, backup_dir: pathlib.Path | None,
+    logger: logging.Logger,
+) -> pathlib.Path:
+    """Сохраняет отдельный результат и копию исходника, не заменяя исходную базу."""
+    ensure_source_unchanged(input_path, original, signature)
+    backup_path = create_backup(input_path, backup_dir)
+    logger.info("Резервная копия: %s", backup_path)
+    # Копия должна совпадать именно с проанализированной версией исходника.
+    if backup_path.read_bytes() != original:
+        raise ValueError("Резервная копия отличается от проанализированного исходника")
+    write_file(output_path, content)
+    saved_content = read_file(output_path)
+    if saved_content != content:
+        raise ValueError("Проверка записи не пройдена: содержимое файла отличается")
+    return backup_path
 
 
 def create_backup(
@@ -636,6 +660,7 @@ def main(argv=None) -> int:
             args.apply, args.backup_dir or args.input.parent, args.log_file, args.verbose,
             args.manage_service, args.service, args.dhcpd, args.dhcp_config, args.service_timeout,
         )
+        # Управляемый режим останавливает службу при входе, ещё до чтения базы.
         with service_session(args, logger, create_backup) as transaction:
             if not args.apply:
                 validate_paths(args.input, args.output)
@@ -646,6 +671,7 @@ def main(argv=None) -> int:
             original = content.encode("utf-8")
             ensure_source_unchanged(args.input, original, signature)
             if transaction is not None:
+                # Передаём исходные байты и права для возможного восстановления.
                 transaction["original"] = original
                 transaction["stat"] = args.input.stat()
             blocks = extract_lease_blocks(content)
@@ -674,23 +700,31 @@ def main(argv=None) -> int:
 
             if args.apply:
                 backup_path = apply_safely(
-                    args.input, new_content, blocks, ips_to_delete,
-                    original, signature, args.backup_dir, logger,
+                    input_path=args.input,
+                    new_content=new_content,
+                    blocks=blocks,
+                    ips_to_delete=ips_to_delete,
+                    original=original,
+                    signature=signature,
+                    backup_dir=args.backup_dir,
+                    logger=logger,
+                    # Внешняя проверка dhcpd подключается только в управляемом режиме.
                     lease_validator=(
                         lambda path: validate_lease_file(args, path, logger)
                     ) if transaction is not None else None,
                     transaction=transaction,
                 )
             else:
-                ensure_source_unchanged(args.input, original, signature)
-                backup_path = create_backup(args.input, args.backup_dir)
-                logger.info("Резервная копия: %s", backup_path)
-                if backup_path.read_bytes() != original:
-                    raise ValueError("Резервная копия отличается от проанализированного исходника")
-                write_file(args.output, new_content)
-                saved_content = read_file(args.output)
-                if saved_content != new_content:
-                    raise ValueError("Проверка записи не пройдена: содержимое файла отличается")
+                backup_path = save_filtered_file(
+                    input_path=args.input,
+                    output_path=args.output,
+                    content=new_content,
+                    original=original,
+                    signature=signature,
+                    backup_dir=args.backup_dir,
+                    logger=logger,
+                )
+        # Успешный итог — только после выхода из with и проверки запуска службы.
         print_outcome(args, backup_path)
         logger.info("Результат: успешно, удалено блоков=%s", len(blocks) - len(new_blocks))
         return 0
@@ -700,9 +734,7 @@ def main(argv=None) -> int:
             print(f"Подробности в журнале: {args.log_file}", file=sys.stderr)
         return 1
     finally:
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-            handler.close()
+        close_logging_handlers(logger)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+# Синтетический пример; проверка на 2026/08/18 10:20:00 UTC.
+
+lease 10.203.10.101 {
+  ends 1 2026/08/17 10:20:00;
+  binding state active;
+}
+lease 10.203.10.102 {
+  ends 5 2026/08/21 10:20:00;
+  binding state free;
+}
+lease 10.203.20.100 {
+  ends 5 2026/08/21 10:20:00;
+  binding state active;
+}
